@@ -14,10 +14,10 @@ using Grabacr07.KanColleViewer.Models;
 namespace Grabacr07.KanColleViewer.ViewModels.Contents.Fleets
 {
 	public class FleetsViewModel : TabItemViewModel
-	{
-		private MultipleDisposable fleetListeners;
+    {
+        private MultipleDisposable fleetListeners;
 
-		public override string Name
+        public override string Name
 		{
 			get { return Properties.Resources.Fleets; }
 			protected set { throw new NotImplementedException(); }
@@ -40,37 +40,58 @@ namespace Grabacr07.KanColleViewer.ViewModels.Contents.Fleets
 			}
 		}
 
-		#endregion
+        #endregion
 
 		#region SelectedFleet 変更通知プロパティ
 
-		private FleetViewModel _SelectedFleet;
+		private ItemViewModel _SelectedFleet;
 
 		/// <summary>
 		/// 現在選択されている艦隊を取得または設定します。
 		/// </summary>
-		public FleetViewModel SelectedFleet
+		public ItemViewModel SelectedFleet
 		{
 			get { return this._SelectedFleet; }
 			set
 			{
-				if (this._SelectedFleet != value)
-				{
-					if (this._SelectedFleet != null) this.SelectedFleet.IsSelected = false;
-					if (value != null) value.IsSelected = true;
-					this._SelectedFleet = value;
-					this.RaisePropertyChanged();
-				}
+				if (this._SelectedFleet != null) this.SelectedFleet.IsSelected = false;
+				if (value != null) value.IsSelected = true;
+				this._SelectedFleet = value;
+				this.RaisePropertyChanged();
 			}
 		}
 
 		#endregion
 
+        #region Fleets2 변경통지 프로퍼티 (연합함대를 포함하는 리스트)
+
+        private ItemViewModel[] _Fleets2;
+
+        public ItemViewModel[] Fleets2
+        {
+            get { return this._Fleets2; }
+            set
+            {
+                if (this._Fleets2 != value)
+                {
+                    this._Fleets2 = value;
+                    this.RaisePropertyChanged();
+                }
+            }
+        }
+
+        #endregion
+
 		public FleetsViewModel()
 		{
+            this.Fleets2 = new ItemViewModel[0];
+
 			KanColleClient.Current.Homeport.Organization
 				.Subscribe(nameof(Organization.Fleets), this.UpdateFleets)
+                .Subscribe(nameof(Organization.Combined), this.UpdateFleets)
+                .Subscribe(nameof(Organization.CombinedFleet), this.UpdateFleets)
 				.AddTo(this);
+
 			Disposable
 				.Create(() => this.fleetListeners?.Dispose())
 				.AddTo(this);
@@ -89,19 +110,79 @@ namespace Grabacr07.KanColleViewer.ViewModels.Contents.Fleets
 			this.fleetListeners?.Dispose();
 			this.fleetListeners = new MultipleDisposable();
 
-			this.Fleets = KanColleClient.Current.Homeport.Organization.Fleets
-				.Select(kvp => this.ToViewModel(kvp.Value))
-				.ToArray();
-			this.SelectedFleet = this.Fleets.FirstOrDefault();
-		}
+            this.Fleets = KanColleClient.Current.Homeport.Organization.Fleets
+                .Select(x => this.ToViewModel(x.Value))
+                .ToArray();
 
-		private FleetViewModel ToViewModel(Fleet fleet)
-		{
-			var vm = new FleetViewModel(fleet).AddTo(this.fleetListeners);
-			fleet.Subscribe(nameof(Fleet.ShipsUpdated), () => { if (KanColleSettings.AutoFleetSelectWhenShipsChanged) this.SelectedFleet = vm; }, false).AddTo(this.fleetListeners);
-			fleet.Subscribe(nameof(Fleet.IsInSortie), () => { if (KanColleSettings.AutoFleetSelectWhenSortie) this.SelectedFleet = vm; }, false).AddTo(this.fleetListeners);
+            if (KanColleClient.Current.Homeport.Organization.Combined)
+            {
+                var cfvm = MakeCombinedFleetViewModel(KanColleClient.Current.Homeport.Organization.CombinedFleet);
+                var fleets = this.Fleets.Where(x => cfvm.Source.Fleets.All(f => f != x.Source));
 
-			return vm;
-		}
-	}
+                this.Fleets2 = EnumerableEx.Return<ItemViewModel>(cfvm)
+                    .Concat(fleets.Select(x => new FleetViewModel(x.Source)))
+                    .ToArray();
+            }
+            else
+            {
+                this.Fleets2 = this.Fleets.Select(x => new FleetViewModel(x.Source))
+                    .OfType<ItemViewModel>()
+                    .ToArray();
+            }
+
+            // SelectedFleet 이 무시되는 현상. 이유는 불명.
+            new System.Threading.Thread(() =>
+            {
+                System.Threading.Thread.Sleep(200);
+
+                if (this.Fleets2.All(x => x != this.SelectedFleet))
+                    this.SelectedFleet = this.Fleets2.FirstOrDefault();
+            }).Start();
+        }
+
+        private CombinedFleetViewModel combinedFleetInstance;
+        private CombinedFleetViewModel MakeCombinedFleetViewModel(CombinedFleet fleet)
+        {
+            if (combinedFleetInstance == null || combinedFleetInstance.Source != fleet)
+            {
+                combinedFleetInstance = new CombinedFleetViewModel(fleet);
+            }
+
+            return combinedFleetInstance;
+        }
+
+        private FleetViewModel ToViewModel(Fleet fleet)
+        {
+            var vm = new FleetViewModel(fleet).AddTo(this.fleetListeners);
+            fleet.Subscribe(nameof(Fleet.ShipsUpdated), () =>
+            {
+                if (KanColleSettings.AutoFleetSelectWhenShipsChanged)
+                {
+                    // 연합함대에 포함된 함대인지 체크
+                    var first = this.Fleets2.FirstOrDefault();
+                    if (first.GetType() == typeof(CombinedFleetViewModel))
+                    {
+                        if((first as CombinedFleetViewModel).Source.Fleets.Any(x => x == fleet))
+                            this.SelectedFleet = first;
+                    }
+                    else this.SelectedFleet = vm;
+                }
+            }, false).AddTo(this.fleetListeners);
+            fleet.Subscribe(nameof(Fleet.IsInSortie), () => {
+                if (KanColleSettings.AutoFleetSelectWhenSortie)
+                {
+                    // 연합함대에 포함된 함대인지 체크
+                    var first = this.Fleets2.FirstOrDefault();
+                    if (first.GetType() == typeof(CombinedFleetViewModel))
+                    {
+                        if ((first as CombinedFleetViewModel).Source.Fleets.Any(x => x == fleet))
+                            this.SelectedFleet = first;
+                    }
+                    else this.SelectedFleet = vm;
+                }
+            }, false).AddTo(this.fleetListeners);
+
+            return vm;
+        }
+    }
 }
