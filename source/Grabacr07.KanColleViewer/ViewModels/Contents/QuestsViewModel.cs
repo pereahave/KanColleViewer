@@ -15,11 +15,11 @@ namespace Grabacr07.KanColleViewer.ViewModels.Contents
 	{
 		public override string Name
 		{
-			get { return Resources.Quests; }
+			get { return Resources.Quests + (this._Badge > 0 ? " (" + this._Badge + ")" : ""); }
 			protected set { throw new NotImplementedException(); }
 		}
 
-        public QuestViewModel[] Current => ComputeQuestPage(this._Quests.Where(x => x.State != QuestState.None).ToArray());
+        public QuestViewModel[] Current => this._Quests.Where(x => x.State != QuestState.None).ToArray();
 
 		#region Quests 変更通知プロパティ
 
@@ -110,6 +110,8 @@ namespace Grabacr07.KanColleViewer.ViewModels.Contents
         #endregion
 
 
+        private int _Badge = 0;
+
         public IList<KeyNameTabItemViewModel> TabItems { get; set; }
 
         private KeyNameTabItemViewModel _SelectedItem;
@@ -180,26 +182,30 @@ namespace Grabacr07.KanColleViewer.ViewModels.Contents
             this.Quests = viewList.ToArray();
             this.IsEmpty = quests.IsEmpty;
             this.IsUntaken = quests.IsUntaken;
+
+            this._Badge = questTracker.AllQuests.Where(x => quests.All.Any(y => y.Id == x.Id)).Count(x => x.GetProgress() == 100);
+            this.RaisePropertyChanged("Name");
         }
 
         private QuestViewModel[] ComputeQuestPage(QuestViewModel[] inp)
         {
             if (inp.Length == 0) return inp;
 
-            int prev = -1;
-            inp = inp.Select(x => { x.LastOnPage = false; return x; }).ToArray();
+            inp = inp
+                .Select(x => { x.LastOnPage = false; return x; })
+                .OrderBy(x => x.Page)
+                .ThenBy(x => x.Id)
+                .ToArray();
 
-            for (int i = 0; i < inp.Length; i++)
-            {
-                if (inp[i].Page != prev)
-                {
-                    if (i > 0) inp[i - 1].LastOnPage = true;
-                    prev = inp[i].Page;
-                }
-            }
-            inp[inp.Length - 1].LastOnPage = true;
+            int[] pages = inp.Select(x => x.Page)
+                .Distinct()
+                .ToArray();
 
-            return inp;
+            foreach (var page in pages)
+                inp.Where(x => x.Page == page)
+                    .Last().LastOnPage = true;
+
+            return inp.ToArray();
         }
 
     }
